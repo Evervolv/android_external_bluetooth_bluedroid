@@ -596,8 +596,10 @@ void BTM_ReadDevInfo (BD_ADDR remote_bda, tBT_DEVICE_TYPE *p_dev_type, tBLE_ADDR
         {
             *p_dev_type = p_inq_info->results.device_type ;
             *p_addr_type = p_inq_info->results.ble_addr_type;
+        } else {
+            /* unknown device, assume BR/EDR */
+            BTM_TRACE_DEBUG0 ("btm_find_dev_type - unknown device, BR/EDR assumed");
         }
-        /* unknown device, assume BR/EDR */
     }
     else /* there is a security device record exisitng */
     {
@@ -1177,11 +1179,17 @@ tBTM_STATUS btm_ble_set_encryption (BD_ADDR bd_addr, void *p_ref_data, UINT8 lin
         case BTM_BLE_SEC_ENCRYPT:
             if (link_role == BTM_ROLE_MASTER)
             {
-                /* start link layer encryption using the security info stored */
-                if (btm_ble_start_encrypt(bd_addr, FALSE, NULL))
-                {
-                    p_rec->sec_state = BTM_SEC_STATE_ENCRYPTING;
+                if(p_rec->sec_state == BTM_SEC_STATE_ENCRYPTING) {
+                    BTM_TRACE_DEBUG0 ("State is already encrypting::");
                     cmd = BTM_CMD_STARTED;
+                }
+                else {
+                    /* start link layer encryption using the security info stored */
+                    if (btm_ble_start_encrypt(bd_addr, FALSE, NULL))
+                    {
+                        p_rec->sec_state = BTM_SEC_STATE_ENCRYPTING;
+                        cmd = BTM_CMD_STARTED;
+                    }
                 }
                 break;
             }
