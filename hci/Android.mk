@@ -11,15 +11,11 @@ LOCAL_SRC_FILES := \
         src/btsnoop.c \
         src/utils.c
 
-ifeq ($(BLUETOOTH_HCI_USE_MCT),true)
-
-LOCAL_CFLAGS := -DHCI_USE_MCT
-
 LOCAL_SRC_FILES += \
+        src/userial.c \
+        src/userial_mct.c \
         src/hci_mct.c \
-        src/userial_mct.c
-
-else
+        src/hci_h4.c
 
 ifeq ($(BLUETOOTH_HCI_USE_USB),true)
 
@@ -41,7 +37,6 @@ LOCAL_SRC_FILES += \
         src/hci_h4.c \
         src/userial.c
 
-endif
 endif
 
 LOCAL_C_INCLUDES += \
