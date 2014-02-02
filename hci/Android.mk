@@ -21,17 +21,6 @@ ifeq ($(TARGET_BUILD_VARIANT), userdebug)
   LOCAL_CFLAGS += -DBTSNOOP_EXT_PARSER_INCLUDED=TRUE
 endif
 
-LOCAL_SRC_FILES += \
-        src/userial.c \
-        src/userial_mct.c \
-        src/hci_mct.c \
-        src/hci_h4.c
-
-ifeq ($(QCOM_BT_USE_SIBS),true)
-LOCAL_SRC_FILES += src/hci_ibs.c
-LOCAL_CFLAGS += -DQCOM_BT_SIBS_ENABLE
-endif
-
 ifeq ($(BLUETOOTH_HCI_USE_USB),true)
 
 LOCAL_CFLAGS += -DHCI_H2
@@ -49,8 +38,15 @@ LOCAL_SHARED_LIBRARIES := \
 else
 
 LOCAL_SRC_FILES += \
-        src/hci_h4.c \
-        src/userial.c
+        src/userial.c \
+        src/userial_mct.c \
+        src/hci_mct.c \
+        src/hci_h4.c
+
+ifeq ($(QCOM_BT_USE_SIBS),true)
+LOCAL_SRC_FILES += src/hci_ibs.c
+LOCAL_CFLAGS += -DQCOM_BT_SIBS_ENABLE
+endif
 
 endif
 
