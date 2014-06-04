@@ -49,7 +49,8 @@ static tGATT_CBACK bta_gatts_cback =
     NULL,
     NULL,
     NULL,
-    bta_gatts_send_request_cback
+    bta_gatts_send_request_cback,
+    NULL
 };
 
 tGATT_APPL_INFO bta_gatts_nv_cback =
@@ -612,11 +613,7 @@ void bta_gatts_send_rsp (tBTA_GATTS_CB *p_cb, tBTA_GATTS_DATA * p_msg)
 **
 ** Function         bta_gatts_indicate_handle
 **
-<<<<<<< HEAD
-** Description      GATTS indicate handel value
-=======
 ** Description      GATTS send handle value indication or notification.
->>>>>>> 6ea30bf... LE: UPF 45 bug fixes
 **
 ** Returns          none.
 **
