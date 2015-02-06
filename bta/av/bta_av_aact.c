@@ -38,6 +38,8 @@
 #include "bta_ar_api.h"
 #endif
 
+#include <cutils/properties.h>
+
 /*****************************************************************************
 **  Constants
 *****************************************************************************/
@@ -554,7 +556,14 @@ void bta_av_proc_stream_evt(UINT8 handle, BD_ADDR bd_addr, UINT8 event, tAVDT_CT
 /* coverity[var_deref_model] */
 /* false-positive: bta_av_conn_cback only processes AVDT_CONNECT_IND_EVT and AVDT_DISCONNECT_IND_EVT event
  *                 these 2 events always have associated p_data */
-    bta_av_conn_cback(handle, bd_addr, event, p_data);
+    if (p_data)
+    {
+        bta_av_conn_cback(handle, bd_addr, event, p_data);
+    }
+    else
+    {
+        APPL_TRACE_ERROR("bta_av_proc_stream_evt: p_data is null");
+    }
 }
 
 /*******************************************************************************
@@ -1377,6 +1386,7 @@ void bta_av_str_opened (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
     tBTA_AV_OPEN    open;
     UINT8 *p;
     UINT16 mtu;
+    char value[PROPERTY_VALUE_MAX];
 
     msg.hdr.layer_specific = p_scb->hndl;
     msg.is_up = TRUE;
@@ -1441,6 +1451,16 @@ void bta_av_str_opened (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
         {
             bta_av_ssm_execute(p_scb, BTA_AV_AP_START_EVT, NULL);
         }
+    }
+
+    // Below part of code is added to pass PTS TC for AVDTP ABORT
+    // Same is enabled based on the below system property. This property should not be enabled for
+    // running mainstream cases and should be enabled only to pass the mentioned TC.
+
+    if ((property_get("bluetooth.force.a2dp.abort", value, "false")) && (!strcmp(value, "true")))
+    {
+        APPL_TRACE_ERROR ("Executing AVDT_AbortReq");
+        AVDT_AbortReq(p_scb->avdt_handle);
     }
 }
 
@@ -3065,9 +3085,7 @@ void bta_av_open_rc (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
 *******************************************************************************/
 void bta_av_open_at_inc (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
 {
-    tBTA_AV_API_OPEN  *p_buf;
-
-    memcpy (&(p_scb->open_api), &(p_data->api_open), sizeof(tBTA_AV_API_OPEN));
+    tBTA_AV_SDP_RES *p_msg;
 
     if (p_scb->coll_mask & BTA_AV_COLL_SETCONFIG_IND)
     {
@@ -3090,12 +3108,17 @@ void bta_av_open_at_inc (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
         /* We need to switch to INIT state and start opening connection. */
         APPL_TRACE_ERROR(" bta_av_open_at_inc ReSetting collision mask  ");
         p_scb->coll_mask = 0;
-        bta_av_set_scb_sst_init (p_scb);
-
-        if ((p_buf = (tBTA_AV_API_OPEN *) GKI_getbuf(sizeof(tBTA_AV_API_OPEN))) != NULL)
+        if (p_scb)
         {
-            memcpy(p_buf, &(p_scb->open_api), sizeof(tBTA_AV_API_OPEN));
-            bta_sys_sendmsg(p_buf);
+            p_scb->state = BTA_AV_OPENING_SST;
+        }
+
+        if ((p_msg = (tBTA_AV_SDP_RES *) GKI_getbuf(sizeof(tBTA_AV_SDP_RES))) != NULL)
+        {
+            p_msg->hdr.event = BTA_AV_SDP_DISC_OK_EVT;
+            p_scb->avdt_version = AVDT_VERSION;
+            p_msg->hdr.layer_specific = bta_av_cb.handle;
+            bta_sys_sendmsg(p_msg);
         }
     }
 }

@@ -29,7 +29,7 @@
 #include "bta_api.h"
 #include "bta_dm_int.h"
 #include "btm_api.h"
-
+#include "btm_int.h"
 #include <string.h>
 
 
@@ -165,20 +165,23 @@ static void bta_dm_pm_cback(tBTA_SYS_CONN_STATUS status, UINT8 id, UINT8 app_id,
     int               index = BTA_DM_PM_SSR0;
 #endif
     tBTA_DM_PEER_DEVICE *p_dev;
+    tACL_CONN   *p_dev_rec;
 
     APPL_TRACE_DEBUG("bta_dm_pm_cback: st(%d), id(%d), app(%d)", status, id, app_id);
 
     btm_status = BTM_ReadLocalVersion (&vers);
     p_dev = bta_dm_find_peer_device(peer_addr);
-
+    p_dev_rec = btm_bda_to_acl(peer_addr, BT_TRANSPORT_BR_EDR);
     /* Disable/Enable sniff policy on the SCO link if sco Up/Down. Will be removed in 2.2*/
     if ((p_dev) &&
         ((status == BTA_SYS_SCO_OPEN) || (status == BTA_SYS_SCO_CLOSE)) )
     {
         if ((btm_status == BTM_SUCCESS) &&
-            (vers.manufacturer ==  LMP_COMPID_BROADCOM) &&
-            (vers.hci_version < HCI_PROTO_VERSION_2_0))
+            (((vers.manufacturer ==  LMP_COMPID_BROADCOM) &&
+            (vers.hci_version < HCI_PROTO_VERSION_2_0)) || (p_dev_rec && (p_dev_rec->lmp_version < 2))))
         {
+            if (p_dev_rec)
+            APPL_TRACE_DEBUG("bta_dm_pm_cback:disable sniff for rmt lmp ver:%d",p_dev_rec->lmp_version);
             bta_dm_pm_set_sniff_policy(p_dev, (status == BTA_SYS_SCO_OPEN));
         }
     }
@@ -557,15 +560,15 @@ static BOOLEAN bta_dm_pm_sniff(tBTA_DM_PEER_DEVICE *p_peer_dev, UINT8 index)
     tBTM_PM_MODE    mode = BTM_PM_STS_ACTIVE;
     tBTM_PM_PWR_MD  pwr_md;
     tBTM_STATUS     status;
-
+    UINT8* p = NULL;
     BTM_ReadPowerMode(p_peer_dev->peer_bdaddr, &mode);
 
 #if (BTM_SSR_INCLUDED == TRUE)
     APPL_TRACE_DEBUG("bta_dm_pm_sniff cur:%d, idx:%d, info:x%x", mode, index, p_peer_dev->info);
     if (mode != BTM_PM_MD_SNIFF ||
         (HCI_SNIFF_SUB_RATE_SUPPORTED(BTM_ReadLocalFeatures ()) &&
-         HCI_SNIFF_SUB_RATE_SUPPORTED(BTM_ReadRemoteFeatures (p_peer_dev->peer_bdaddr)) &&
-         !(p_peer_dev->info & BTA_DM_DI_USE_SSR)))
+         (((p = BTM_ReadRemoteFeatures(p_peer_dev->peer_bdaddr)) != NULL) &&
+           HCI_SNIFF_SUB_RATE_SUPPORTED(p)) && !(p_peer_dev->info & BTA_DM_DI_USE_SSR)))
 #else
     APPL_TRACE_DEBUG("bta_dm_pm_sniff cur:%d, idx:%d", mode, index);
     if(mode != BTM_PM_MD_SNIFF)

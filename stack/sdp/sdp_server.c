@@ -30,6 +30,7 @@
 #include "gki.h"
 #include "bt_types.h"
 #include "bt_utils.h"
+#include "bt_trace.h"
 #include "btu.h"
 
 #include "l2cdefs.h"
@@ -48,7 +49,11 @@
 #define SDP_MAX_ATTR_RSPHDR_LEN         10
 #define AVRCP_VERSION_POSITION          7
 #define SDP_AVRCP_PROFILE_DESC_LENGTH   8
+#define AVRCP_SUPPORTED_FEATURES_POSITION 1
+#define AVRCP_BROWSE_SUPPORT_BITMASK    0x40
 
+#define AVRCP_13  0x03
+#define AVRCP_14  0x04
 /* Few remote device does not understand AVRCP version greater
  * than 1.3 and falls back to 1.0, we would like to blacklist
  * and send AVRCP versio as 1.3.
@@ -61,9 +66,19 @@ static const UINT8 sdp_black_list_prefix[][3] = {{0x00, 0x1D, 0xBA},  /* JVC car
                                                  {0x00, 0x0E, 0x9F},  /* Porshe car kit */
                                                  {0x00, 0x13, 0x7B},  /* BYOM Opel*/
                                                  {0x68, 0x84, 0x70},  /* KIA MOTOR*/
+                                                 {0x00, 0x21, 0xCC},  /* FORD FIESTA*/
+                                                 {0x9C, 0xDF, 0x03},  /* BMW 3 Series*/
+                                                 {0x30, 0x14, 0x4A},  /* Mini Cooper*/
+                                                 {0x38, 0xC0, 0x96},  /* Seat Leon*/
                                                  {0x00, 0x54, 0xAF},  /* Chrysler*/
-                                                 {0x04, 0x88, 0xE2}   /* BeatsStudio Wireless*/ };
+                                                 {0x04, 0x88, 0xE2},  /* BeatsStudio Wireless*/
+                                                 {0xA0, 0x14, 0x3D},  /* VW Sharen*/
+                                                 {0xE0, 0x75, 0x0A}   /* VW GOLF*/};
 
+/* Few carkits supports AVRCP1.4 but not AVRCP1.5
+*  In that case fall back to 1.4 to support browsing
+*/
+static const UINT8 sdp_dev_support_avrcp_14[][3] = {{0x00, 0x02, 0x0C} /*Clarion*/};
 /********************************************************************************/
 /*              L O C A L    F U N C T I O N     P R O T O T Y P E S            */
 /********************************************************************************/
@@ -145,6 +160,33 @@ BOOLEAN sdp_dev_blacklisted_for_avrcp15 (BD_ADDR addr)
     return FALSE;
 }
 
+/****************************************************************************
+**
+** Function         check_sdp_dev_supports_avrcp14
+**
+** Description      This function is called to check if Remote device
+**                  support Avrcp version 1.4.
+**
+** Returns          BOOLEAN
+**
+*******************************************************************************/
+BOOLEAN check_sdp_dev_supports_avrcp14 (BD_ADDR addr)
+{
+    int blacklistsize = 0;
+    int i = 0;
+
+    blacklistsize = sizeof(sdp_dev_support_avrcp_14)/sizeof(sdp_dev_support_avrcp_14[0]);
+    for (i=0; i < blacklistsize; i++)
+    {
+        if (0 == memcmp(sdp_dev_support_avrcp_14[i], addr, 3))
+        {
+            SDP_TRACE_ERROR("SDP Avrcp Version supports only 1.4");
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 /*************************************************************************************
 **
 ** Function        sdp_fallback_avrcp_version
@@ -167,11 +209,45 @@ BOOLEAN sdp_fallback_avrcp_version (tSDP_ATTRIBUTE *p_attr, BD_ADDR remote_addre
         {
             if (sdp_dev_blacklisted_for_avrcp15 (remote_address))
             {
-                p_attr->value_ptr[AVRCP_VERSION_POSITION] = 0x03; // Update AVRCP version as 1.3
+                p_attr->value_ptr[AVRCP_VERSION_POSITION] = AVRCP_13; // Update AVRCP version as 1.3
                 SDP_TRACE_ERROR("SDP Change AVRCP Version = 0x%x",
                          p_attr->value_ptr[AVRCP_VERSION_POSITION]);
                 return TRUE;
             }
+            else if (check_sdp_dev_supports_avrcp14 ( remote_address))
+            {
+                p_attr->value_ptr[AVRCP_VERSION_POSITION] = AVRCP_14; // Update AVRCP version as 1.4
+                SDP_TRACE_ERROR("SDP Change AVRCP Version = 0x%x",
+                         p_attr->value_ptr[AVRCP_VERSION_POSITION]);
+               return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+/*************************************************************************************
+**
+** Function        sdp_reset_avrcp_browsing_bit
+**
+** Description     Checks if Service Class ID is AV Remote Control TG, attribute id
+**                 is Supported features and remote BD address
+**                 matches device blacklist, reset Browsing Bit
+**
+** Returns         BOOLEAN
+**
+***************************************************************************************/
+BOOLEAN sdp_reset_avrcp_browsing_bit (tSDP_ATTRIBUTE attr, tSDP_ATTRIBUTE *p_attr,
+BD_ADDR                                                                      remote_address)
+{
+    if ((p_attr->id == ATTR_ID_SUPPORTED_FEATURES) && (attr.id == ATTR_ID_SERVICE_CLASS_ID_LIST) &&
+        (((attr.value_ptr[1] << 8) | (attr.value_ptr[2])) == UUID_SERVCLASS_AV_REM_CTRL_TARGET))
+    {
+        if (sdp_dev_blacklisted_for_avrcp15 (remote_address))
+        {
+            SDP_TRACE_ERROR("Reset Browse feature bitmask");
+            p_attr->value_ptr[AVRCP_SUPPORTED_FEATURES_POSITION] &= ~AVRCP_BROWSE_SUPPORT_BITMASK;
+            return TRUE;
         }
     }
     return FALSE;
@@ -414,6 +490,7 @@ static void process_service_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
     BT_HDR          *p_buf;
     BOOLEAN         is_cont = FALSE;
     BOOLEAN         is_avrcp_fallback = FALSE;
+    BOOLEAN         is_avrcp_browse_bit_reset = FALSE;
     UINT16          attr_len;
 
     /* Extract the record handle */
@@ -452,6 +529,19 @@ static void process_service_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
     /* Check if this is a continuation request */
     if (*p_req)
     {
+        /* Free and reallocate buffer */
+        if (p_ccb->rsp_list)
+        {
+            GKI_freebuf (p_ccb->rsp_list);
+        }
+
+        p_ccb->rsp_list = (UINT8 *)GKI_getbuf (max_list_len);
+        if (p_ccb->rsp_list == NULL)
+        {
+            SDP_TRACE_ERROR ("SDP - no scratch buf for attr rsp");
+            return;
+        }
+
         if (*p_req++ != SDP_CONTINUATION_LEN)
         {
             sdpu_build_n_send_error (p_ccb, trans_num, SDP_INVALID_CONT_STATE, SDP_TEXT_BAD_CONT_LEN);
@@ -525,6 +615,8 @@ static void process_service_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
 #if SDP_AVRCP_1_5 == TRUE
             /* Check for UUID Remote Control and Remote BD address  */
             is_avrcp_fallback = sdp_fallback_avrcp_version (p_attr, p_ccb->device_address);
+            is_avrcp_browse_bit_reset = sdp_reset_avrcp_browsing_bit(
+                        p_rec->attribute[1], p_attr, p_ccb->device_address);
 #endif
             /* Check if attribute fits. Assume 3-byte value type/length */
             rem_len = max_list_len - (INT16) (p_rsp - &p_ccb->rsp_list[0]);
@@ -584,6 +676,14 @@ static void process_service_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
                 p_attr->value_ptr[AVRCP_VERSION_POSITION] = 0x05;
                 is_avrcp_fallback = FALSE;
             }
+            if (is_avrcp_browse_bit_reset)
+            {
+                /* Restore Browsing bit */
+                SDP_TRACE_ERROR("Restore Browsing bit");
+                p_attr->value_ptr[AVRCP_SUPPORTED_FEATURES_POSITION]
+                                        |= AVRCP_BROWSE_SUPPORT_BITMASK;
+                is_avrcp_browse_bit_reset = FALSE;
+            }
         }
     }
     if (is_avrcp_fallback)
@@ -591,6 +691,14 @@ static void process_service_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
         /* Update AVRCP version back to 1.5 */
         p_attr->value_ptr[AVRCP_VERSION_POSITION] = 0x05;
         is_avrcp_fallback = FALSE;
+    }
+    if (is_avrcp_browse_bit_reset)
+    {
+        /* Restore Browsing bit */
+        SDP_TRACE_ERROR("Restore Browsing bit");
+        p_attr->value_ptr[AVRCP_SUPPORTED_FEATURES_POSITION]
+                                    |= AVRCP_BROWSE_SUPPORT_BITMASK;
+        is_avrcp_browse_bit_reset = FALSE;
     }
     /* If all the attributes have been accomodated in p_rsp,
        reset next_attr_index */
@@ -698,6 +806,7 @@ static void process_service_search_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
     BT_HDR         *p_buf;
     BOOLEAN         maxxed_out = FALSE, is_cont = FALSE;
     BOOLEAN         is_avrcp_fallback = FALSE;
+    BOOLEAN         is_avrcp_browse_bit_reset = FALSE;
     UINT8           *p_seq_start;
     UINT16          seq_len, attr_len;
     UNUSED(p_req_end);
@@ -730,6 +839,19 @@ static void process_service_search_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
     /* Check if this is a continuation request */
     if (*p_req)
     {
+        /* Free and reallocate buffer */
+        if (p_ccb->rsp_list)
+        {
+            GKI_freebuf (p_ccb->rsp_list);
+        }
+
+        p_ccb->rsp_list = (UINT8 *)GKI_getbuf (max_list_len);
+        if (p_ccb->rsp_list == NULL)
+        {
+            SDP_TRACE_ERROR ("SDP - no scratch buf for search rsp");
+            return;
+        }
+
         if (*p_req++ != SDP_CONTINUATION_LEN)
         {
             sdpu_build_n_send_error (p_ccb, trans_num, SDP_INVALID_CONT_STATE, SDP_TEXT_BAD_CONT_LEN);
@@ -821,6 +943,8 @@ static void process_service_search_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
 #if SDP_AVRCP_1_5 == TRUE
                 /* Check for UUID Remote Control and Remote BD address  */
                 is_avrcp_fallback = sdp_fallback_avrcp_version (p_attr, p_ccb->device_address);
+                is_avrcp_browse_bit_reset = sdp_reset_avrcp_browsing_bit(
+                            p_rec->attribute[1], p_attr, p_ccb->device_address);
 #endif
                 /* Check if attribute fits. Assume 3-byte value type/length */
                 rem_len = max_list_len - (INT16) (p_rsp - &p_ccb->rsp_list[0]);
@@ -885,6 +1009,14 @@ static void process_service_search_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
                     p_attr->value_ptr[AVRCP_VERSION_POSITION] = 0x05;
                     is_avrcp_fallback = FALSE;
                 }
+                if (is_avrcp_browse_bit_reset)
+                {
+                    /* Restore Browsing bit */
+                    SDP_TRACE_ERROR("Restore Browsing bit");
+                    p_attr->value_ptr[AVRCP_SUPPORTED_FEATURES_POSITION]
+                                            |= AVRCP_BROWSE_SUPPORT_BITMASK;
+                    is_avrcp_browse_bit_reset = FALSE;
+                }
             }
         }
         if (is_avrcp_fallback)
@@ -893,6 +1025,14 @@ static void process_service_search_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
             p_attr->value_ptr[AVRCP_VERSION_POSITION] = 0x05;
             is_avrcp_fallback = FALSE;
         }
+        if (is_avrcp_browse_bit_reset)
+        {
+            /* Restore Browsing bit */
+            SDP_TRACE_ERROR("Restore Browsing bit");
+            p_attr->value_ptr[AVRCP_SUPPORTED_FEATURES_POSITION]
+                                    |= AVRCP_BROWSE_SUPPORT_BITMASK;
+            is_avrcp_browse_bit_reset = FALSE;
+        }
 
         /* Go back and put the type and length into the buffer */
         if (p_ccb->cont_info.last_attr_seq_desc_sent == FALSE)
@@ -900,8 +1040,15 @@ static void process_service_search_attr_req (tCONN_CB *p_ccb, UINT16 trans_num,
             seq_len = sdpu_get_attrib_seq_len(p_rec, &attr_seq_sav);
             if (seq_len != 0)
             {
-                UINT8_TO_BE_STREAM  (p_seq_start, (DATA_ELE_SEQ_DESC_TYPE << 3) | SIZE_IN_NEXT_WORD);
-                UINT16_TO_BE_STREAM (p_seq_start, seq_len);
+                if (p_seq_start)
+                {
+                    UINT8_TO_BE_STREAM  (p_seq_start, (DATA_ELE_SEQ_DESC_TYPE << 3) | SIZE_IN_NEXT_WORD);
+                    UINT16_TO_BE_STREAM (p_seq_start, seq_len);
+                }
+                else
+                {
+                    SDP_TRACE_DEBUG("SDP service and attribute rsp: Attribute sequence p_seq_start is NULL");
+                }
 
                 if (maxxed_out)
                     p_ccb->cont_info.last_attr_seq_desc_sent = TRUE;
